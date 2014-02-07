@@ -1,53 +1,5 @@
 const {interfaces: Ci,	utils: Cu} = Components;
 Cu.import('resource://gre/modules/Services.jsm');
-const ignoreFrames = true;
-
-function addDiv(theDoc) {
-	//Cu.reportError('addDiv');
-	if (!theDoc) { Cu.reportError('no doc!'); return; }//document not provided, it is undefined likely
-	if (!theDoc instanceof Ci.nsIDOMHTMLDocument) { Cu.reportError('not html doc'); return; }//not html document, so its likely an xul document
-	if(!(theDoc.location  && theDoc.location.host.indexOf('github.com') > -1)) {Cu.reportError('location not match host:' + theDoc.location.host); return;}
-	Cu.reportError('addDiv match - theDoc.location = "' + theDoc.location + '" | theDoc.location.host = "' + theDoc.location.host + '"');
-	
-	if (!theDoc.querySelector) {
-		Cu.reportError('querySelector is not in theDoc');
-		theDoc = theDoc.document; //no idea but this is the magic fix for when document-element-inserted calls add div
-	}
-	removeDiv(theDoc);
-	
-	return;
-	var script = theDoc.createElement('script');
-	script.setAttribute('src', chromePath + 'inject.js');
-	script.setAttribute('id', 'ghForkable_inject');
-	theDoc.documentElement.appendChild(script);
-}
-
-function removeDiv(theDoc, skipChecks) {
-	Cu.reportError('removeDiv');
-	if (!skipChecks) {
-		if (!theDoc) { Cu.reportError('no doc!'); return; }//document not provided, it is undefined likely
-		if (!theDoc instanceof Ci.nsIDOMHTMLDocument) { Cu.reportError('not html doc'); return; }//not html document, so its likely an xul document
-		if(!(theDoc.location  && theDoc.location.host.indexOf('github.com') > -1)) {Cu.reportError('location not match host:' + theDoc.location.host); return;}
-		Cu.reportError('removeDiv match - theDoc.location = "' + theDoc.location + '" | theDoc.location.host = "' + theDoc.location.host + '"');
-	}
-	//cDump(theDoc, 'theDoc', 1);
-	if (!theDoc.querySelector) {
-		Cu.reportError('querySelector is not in theDoc');
-		theDoc = theDoc.document; //no idea but this is the magic fix for when document-element-inserted calls add div
-	}
-	
-	return;
-	
-	var alreadyThere = theDoc.querySelector('#ghForkable_inject');
-	if (alreadyThere) {
-		alreadyThere.parentNode.removeChild(alreadyThere);
-	}
-	
-	var forkBtn = theDoc.querySelector('.ghForkable_fork'); //do this check because if script there, it doesnt necessarily have the btn, cuz script checks whether to add btn or not
-	if (forkBtn) {
-		forkBtn.parentNode.removeChild(forkBtn);
-	}
-}
 
 var observer = {
     httpModify: {
@@ -125,10 +77,13 @@ var observer = {
 				'loadContext.topWindow': {},
 				'loadContext.topFrameElement': {},
 				'loadContext.associatedWindow.frameElement': {},
-				'loadContext.chromeEventHandler': {},
+				'loadContext.associatedWindow.frameElement.contentWindow': {},
+				'loadContext.associatedWindow.document': {},
+				'loadContext.associatedWindow.document.documentElement': {},
+				/* 'loadContext.chromeEventHandler': {},
 				'loadContext.chromeEventHandler.ownerDocument.defaultView': {},
 				'loadContext.chromeEventHandler.ownerDocument.defaultView.gBrowser': {},
-				'loadContext.chromeEventHandler.ownerDocument.defaultView.gBrowser.contentWindow': {}
+				'loadContext.chromeEventHandler.ownerDocument.defaultView.gBrowser.contentWindow': {} */
 			}
 			for (var n in testThese) {
 				for (var n2 in testThese) {
@@ -161,129 +116,81 @@ var observer = {
 			testThese['loadContext'] = loadContext;
 			testThese['oHttp.URI'] = oHttp.URI;
 			
-			//cDump(testThese,'testThese',1);
-			try {
-				cDump(loadContext.associatedWindow,'loadContext.associatedWindow',1);
-			} catch(ignore) {}
+			var httpFlags = {
+				LOAD_REQUESTMASK: 65535,
+				LOAD_NORMAL: 0,
+				LOAD_BACKGROUND: 1,
+				INHIBIT_PIPELINE: 64,
+				INHIBIT_CACHING: 128,
+				INHIBIT_PERSISTENT_CACHING: 256,
+				LOAD_BYPASS_CACHE: 512,
+				LOAD_FROM_CACHE: 1024,
+				VALIDATE_ALWAYS: 2048,
+				VALIDATE_NEVER: 4096,
+				VALIDATE_ONCE_PER_SESSION: 8192,
+				LOAD_ANONYMOUS: 16384,
+				LOAD_FRESH_CONNECTION: 32768,
+				LOAD_DOCUMENT_URI: 65536,
+				LOAD_RETARGETED_DOCUMENT_URI: 131072,
+				LOAD_REPLACE: 262144,
+				LOAD_INITIAL_DOCUMENT_URI: 524288,
+				LOAD_TARGETED: 1048576,
+				LOAD_CALL_CONTENT_SNIFFERS: 2097152,
+				LOAD_CLASSIFY_URI: 4194304,
+				LOAD_TREAT_APPLICATION_OCTET_STREAM_AS_UNKNOWN: 8388608,
+				LOAD_EXPLICIT_CREDENTIALS: 16777216,
+				DISPOSITION_INLINE: 0,
+				DISPOSITION_ATTACHMENT: 1,
+			};
+			var hasFlags = []; // if has LOAD_DOCUMENT_URI it usually also has LOAD_INITIAL_DOCUMENT_URI if its yop window, but on vie source we just see LOAD_DOCUMENT_URI. If frame we just see LOAD_DOCUMENT_URI. js css files  etc (i think just some imgs fire http modify, not sure, maybe all but not if cached) come in with LOAD_CLASSIFY_URI or no flags (0) 
+			//note however, that if there is a redirect, you will get the LOAD_DOC_URI and the LOAD_INIT_DOC_URI on initial and then on consequent redirects until final redirect. All redirects have LOAD_REPLACE flag tho
+			//note: i think all imgs throw http-on-modify but cahced images dont. images can also have LOAD_REPLACE flag
+			/*
+			nly time i saw flag == 0 is for favicon and:
+			oHttp.name=http://stats.g.doubleclick.net/__utm.gif?utmwv=5.4.7dc&utms=2&utmn=1676837371&utmhn=www.w3schools.com&utmcs=windows-1252&utmsr=1280x1024&utmvp=1280x930&utmsc=24-bit&utmul=en-us&utmje=0&utmfl=12.0%20r0&utmdt=Tryit%20Editor%20v1.8&utmhid=421453928&utmr=-&utmp=%2Fjs%2Ftryit.asp%3Ffilename%3Dtryjs_myfirst&utmht=1391732799038&utmac=UA-3855518-1&utmcc=__utma%3D119627022.1168943572.1391716829.1391726523.1391732238.5%3B%2B__utmz%3D119627022.1391716904.2.2.utmcsr%3Dbing%7Cutmccn%3D(organic)%7Cutmcmd%3Dorganic%7Cutmctr%3Dw3schools%2520javascript%3B&utmu=q~
+			*/
+			/*
+				//for github after LOAD_DOCUMENT_URI, it the does: 
+				"LOAD_REQUESTMASK | 
+				LOAD_BACKGROUND | 
+				INHIBIT_PIPELINE | 
+				LOAD_EXPLICIT_CREDENTIALS | 
+				DISPOSITION_ATTACHMENT"
+				//so tested on w3schools, if flags come out to be this above, then it is an ajax request, can have INHIBIT_CACHING flag
+			*/
+			/*
+			notes start for http-on-examine-response
+			if redirecting, do not get the initial redirects, only get the final redirect with LOAD_REPLACE and LOAD_DOCUMENT_URI and LOAD_INITIAL_DOCUMENT_URI
+			*/
+			for (var f in httpFlags) {
+				if (oHttp.loadFlags & httpFlags[f]) {
+					hasFlags.push(f);
+				}
+			}
+			testThese.vals['oHttp hasFlags'] = hasFlags.join(' | ');	
+			testThese.vals['oHttp.loadFlags'] = oHttp.loadFlags;	
+			testThese['loadContext.associatedWindow'] = loadContext.associatedWindow;
+			cDump(testThese,'testThese',2,false);
 			
         },
         register: function() {
-            Services.obs.addObserver(observer.httpModify, 'http-on-modify-request', false);
+            Services.obs.addObserver(observer.httpModify, 'http-on-examine-response', false);
         },
         unregister: function() {
-            Services.obs.removeObserver(observer.httpModify, 'http-on-modify-request');
+            Services.obs.removeObserver(observer.httpModify, 'http-on-examine-response');
         }
     }
 };
 
-function loadIntoWindow (aDOMWindow, aXULWindow) {
-	if (!aDOMWindow) {
-		return;
-	}
-	if (aDOMWindow.gBrowser) {
-		if (aDOMWindow.gBrowser.tabContainer) {
-			//has tabContainer
-			//start - go through all tabs in this window we just added to
-			var tabs = aDOMWindow.gBrowser.tabContainer.childNodes;
-			for (var i = 0; i < tabs.length; i++) {
-				Cu.reportError('DOING tab: ' + i);
-				var tabBrowser = tabs[i].linkedBrowser;
-				var win = tabBrowser.contentWindow;
-				loadIntoContentWindowAndItsFrames(win);
-			}
-			//end - go through all tabs in this window we just added to
-		} else {
-			//does not have tabContainer
-			var win = aDOMWindow.gBrowser.contentWindow;
-			loadIntoContentWindowAndItsFrames(win);
-		}
-	} else {
-		//window does not have gBrowser
-		//Cu.reportError('not a match its just doing non-gBrowser-ed window');
-		loadIntoContentWindowAndItsFrames(aDOMWindow);
-	}
-}
-
-function unloadFromWindow(aDOMWindow, aXULWindow) {
-	if (!aDOMWindow) {
-		return;
-	}
-	if (aDOMWindow.gBrowser) {
-		if (aDOMWindow.gBrowser.tabContainer) {
-			//has tabContainer
-			//start - go through all tabs in this window we just added to
-			var tabs = aDOMWindow.gBrowser.tabContainer.childNodes;
-			for (var i = 0; i < tabs.length; i++) {
-				Cu.reportError('DOING tab: ' + i);
-				var tabBrowser = tabs[i].linkedBrowser;
-				var win = tabBrowser.contentWindow;
-				unloadFromContentWindowAndItsFrames(win);
-			}
-			//end - go through all tabs in this window we just added to
-		} else {
-			//does not have tabContainer
-			var win = aDOMWindow.gBrowser.contentWindow;
-			unloadFromContentWindowAndItsFrames(win);
-		}
-	} else {
-		//window does not have gBrowser
-		Cu.reportError('match in non-gBrowser-ed window');
-		unloadFromContentWindowAndItsFrames(aDOMWindow);
-	}
-}
-
-function loadIntoContentWindowAndItsFrames(theWin) {
-	var frames = theWin.frames;
-	var winArr = [theWin];
-	for (var j = 0; j < frames.length; j++) {
-		winArr.push(frames[j].window);
-	}
-	Cu.reportError('# of frames in tab: ' + frames.length);
-	for (var j = 0; j < winArr.length; j++) {
-		if (j == 0) {
-			Cu.reportError('**checking win: ' + j + ' location = ' + winArr[j].document.location);
-		} else {
-			Cu.reportError('**checking frame win: ' + j + ' location = ' + winArr[j].document.location);
-		}
-		var doc = winArr[j].document;
-		//START - edit below here
-		addDiv(doc);
-		if (ignoreFrames) {
-			break; //uncomment this line if you don't want to add to frames
-		}
-		//END - edit above here
-	}
-}
-
-function unloadFromContentWindowAndItsFrames(theWin) {
-	var frames = theWin.frames;
-	var winArr = [theWin];
-	for (var j = 0; j < frames.length; j++) {
-		winArr.push(frames[j].window);
-	}
-	Cu.reportError('# of frames in tab: ' + frames.length);
-	for (var j = 0; j < winArr.length; j++) {
-		if (j == 0) {
-			Cu.reportError('**checking win: ' + j + ' location = ' + winArr[j].document.location);
-		} else {
-			Cu.reportError('**checking frame win: ' + j + ' location = ' + winArr[j].document.location);
-		}
-		var doc = winArr[j].document;
-		//START - edit below here
-		removeDiv(doc);
-		if (ignoreFrames) {
-			break; //uncomment this line if you don't want to add to frames
-		}
-		//END - edit above here
-	}
-}
-
 function cDump(obj, title, deep, outputTarget) {
 	//Services jsm must be imported
-	//outputTarget == 0 then new tab
+	//set deep to 1 to make it deep but initialize deeps div at none.
+	//se deep to 2 to initialize at block
+	//outputTarget == 0 then new tab, if set outputTarget to false then will do 0 but will load tab in background, if set to 0 or leave undefined it will load tab in foreground
 	//outputTarget == 1 then reportError (cannot do deep in this outputTarget)
 	//outputTarget == 2 then new window (not yet setup)
 	//outputTarget == 3 then Services.console.logStringMessage
+	//outputTarget == 'string', file at that path (not set up yet)
 	var outputTargetsDisableDeep = [1,3];
     var tstr = '';
     var bstr = '';
@@ -295,13 +202,13 @@ function cDump(obj, title, deep, outputTarget) {
         try{
             bstr += b+'='+obj[b]+'\n';
             if (deep && outputTargetsDisableDeep.indexOf(outputTarget) == -1) {
-                bstr += '<div style="margin-left:35px;color:gray;cursor:pointer;border:1px solid blue;" onclick="this.childNodes[1].style.display=this.childNodes[1].style.display==\'block\'?\'none\':\'block\';this.scrollIntoView(true);">click to toggle<div style="display:none;">';
+                bstr += '<div style="margin-left:35px;color:gray;cursor:pointer;border:1px solid blue;" onclick="this.childNodes[1].style.display=this.childNodes[1].style.display==\'block\'?\'none\':\'block\';this.scrollIntoView(true);">click to toggle<div style="display:' + (deep==2 ? 'block' : 'none') + ';">';
                 for (var c in obj[b]) {
                     try {
                         bstr += '\t\t\t' + c+'='+obj[b][c]+'\n';
                     } catch(e0) {
                         bstr += '\t\t\t' + c+'=e0=deep_fstr='+e0+'\n';
-                    }
+                    }	
                 }
                 bstr += '</div></div>'
             }
@@ -319,13 +226,13 @@ function cDump(obj, title, deep, outputTarget) {
 		var cWin = Services.wm.getMostRecentWindow('navigator:browser');
 		
 		var onloadFunc = function() {
-			cWin.gBrowser.selectedTab = cWin.gBrowser.tabContainer.childNodes[cWin.gBrowser.tabContainer.childNodes.length-1];
+			//cWin.gBrowser.selectedTab = cWin.gBrowser.tabContainer.childNodes[cWin.gBrowser.tabContainer.childNodes.length-1];
 			newTabBrowser.removeEventListener('load', onloadFunc, true);
 			if (title) { newTabBrowser.contentDocument.title = title; }
 			newTabBrowser.contentDocument.body.innerHTML = tstr.replace(/\n/g,'<br>')
 		};
 		
-		var newTabBrowser = cWin.gBrowser.getBrowserForTab(cWin.gBrowser.addTab('about:blank'));
+		var newTabBrowser = cWin.gBrowser.getBrowserForTab(cWin.gBrowser.loadOneTab('about:blank',{inBackground:outputTarget===false?true:false}));
 		newTabBrowser.addEventListener('load', onloadFunc, true);
 	} else if (outputTarget == 1) {
 		tstr = 'CDUMP OF "' + title + '">>>\n\n' + tstr + ' "\n\nEND: CDUMP OF "' + title + '" ^^^';
@@ -340,13 +247,6 @@ function cDump(obj, title, deep, outputTarget) {
 }
 
 function startup(aData, aReason) {
-	let XULWindows = Services.wm.getXULWindowEnumerator(null);
-	while (XULWindows.hasMoreElements()) {
-		let aXULWindow = XULWindows.getNext();
-		let aDOMWindow = aXULWindow.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowInternal || Ci.nsIDOMWindow);
-		loadIntoWindow(aDOMWindow, aXULWindow);
-	}
-	
 	for (var o in observer) {
 		observer[o].register();
 	}
@@ -356,13 +256,6 @@ function shutdown(aData, aReason) {
 	if (aReason == APP_SHUTDOWN) return;
 	for (var o in observer) {
 		observer[o].unregister();
-	}
-	
-	let XULWindows = Services.wm.getXULWindowEnumerator(null);
-	while (XULWindows.hasMoreElements()) {
-		let aXULWindow = XULWindows.getNext();
-		let aDOMWindow = aXULWindow.QueryInterface(Ci.nsIInterfaceRequestor).getInterface(Ci.nsIDOMWindowInternal || Ci.nsIDOMWindow);
-		unloadFromWindow(aDOMWindow, aXULWindow);
 	}
 }
 
